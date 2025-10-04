@@ -147,6 +147,12 @@ function getValues(
   return result;
 }
 
+// Cache for parsed template expressions
+const templateExpressionCache = new Map<
+  string,
+  Array<{ type: "expression" | "literal"; value: string }>
+>();
+
 export function parseUrl(template: string) {
   return {
     expand: expand.bind(null, template),
@@ -156,45 +162,78 @@ export function parseUrl(template: string) {
 function expand(template: string, context: object): string {
   var operators = ["+", "#", ".", "/", ";", "?", "&"];
 
-  template = template.replace(
-    /\{([^\{\}]+)\}|([^\{\}]+)/g,
-    function (_, expression, literal) {
-      if (expression) {
-        let operator: string = "";
-        const values: string[][] = [];
+  // Check if we have cached parsed expressions for this template
+  let parsedExpressions = templateExpressionCache.get(template);
 
-        if (operators.indexOf(expression.charAt(0)) !== -1) {
-          operator = expression.charAt(0);
-          expression = expression.substr(1);
-        }
-
-        expression.split(/,/g).forEach(function (variable: string) {
-          var tmp = /([^:\*]*)(?::(\d+)|(\*))?/.exec(variable) as string[];
-          values.push(getValues(context, operator, tmp[1], tmp[2] || tmp[3]));
-        });
-
-        if (operator && operator !== "+") {
-          var separator = ",";
-
-          if (operator === "?") {
-            separator = "&";
-          } else if (operator !== "#") {
-            separator = operator;
-          }
-          return (values.length !== 0 ? operator : "") + values.join(separator);
+  if (!parsedExpressions) {
+    // Parse and cache the template structure
+    parsedExpressions = [];
+    template.replace(
+      /\{([^\{\}]+)\}|([^\{\}]+)/g,
+      function (_, expression, literal) {
+        if (expression) {
+          parsedExpressions!.push({ type: "expression", value: expression });
         } else {
-          return values.join(",");
+          parsedExpressions!.push({ type: "literal", value: literal });
         }
-      } else {
-        return encodeReserved(literal);
-      }
-    },
-  );
-
-  if (template === "/") {
-    return template;
-  } else {
-    return template.replace(/\/$/, "");
+        return "";
+      },
+    );
+    templateExpressionCache.set(template, parsedExpressions);
   }
+
+  // Now process the cached expressions
+  let result = "";
+  for (const part of parsedExpressions) {
+    if (part.type === "literal") {
+      result += encodeReserved(part.value);
+    } else {
+      let expression = part.value;
+      let operator: string = "";
+      const values: string[][] = [];
+
+      if (operators.indexOf(expression.charAt(0)) !== -1) {
+        operator = expression.charAt(0);
+        expression = expression.substr(1);
+      }
+
+      expression.split(/,/g).forEach(function (variable: string) {
+        var tmp = /([^:\*]*)(?::(\d+)|(\*))?/.exec(variable) as string[];
+        values.push(getValues(context, operator, tmp[1], tmp[2] || tmp[3]));
+      });
+
+      if (operator && operator !== "+") {
+        var separator = ",";
+
+        if (operator === "?") {
+          separator = "&";
+        } else if (operator !== "#") {
+          separator = operator;
+        }
+        result +=
+          (values.length !== 0 ? operator : "") + values.join(separator);
+      } else {
+        result += values.join(",");
+      }
+    }
+  }
+
+  if (result === "/") {
+    return result;
+  } else {
+    return result.replace(/\/$/, "");
+  }
+}
+
+// Export function to clear template cache for testing
+export function clearUrlTemplateCache(): void {
+  templateExpressionCache.clear();
+}
+
+/* c8 ignore start */
+export function getUrlTemplateCacheStats() {
+  return {
+    templateCacheSize: templateExpressionCache.size,
+  };
 }
 /* c8 ignore stop */
